@@ -273,6 +273,44 @@ export default function ClassificationTab() {
     img.src = src;
   };
 
+  // Helper to convert base64 dataURL to File object
+  const dataURLtoFile = (dataurl: string, filename: string): File => {
+    const arr = dataurl.split(",");
+    const mime = arr[0].match(/:(.*?);/)?.[1] || "image/jpeg";
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new File([u8arr], filename, { type: mime });
+  };
+
+  // Helper to upload image data URL to Supabase Storage and get public URL
+  const uploadToStorage = async (dataUrl: string, path: string): Promise<string | null> => {
+    try {
+      const file = dataURLtoFile(dataUrl, path.split("/").pop() || "image.jpg");
+      
+      const { data, error } = await supabase.storage
+        .from("butterfly-images")
+        .upload(path, file, {
+          contentType: file.type,
+          upsert: true
+        });
+        
+      if (error) throw error;
+      
+      const { data: publicUrlData } = supabase.storage
+        .from("butterfly-images")
+        .getPublicUrl(path);
+        
+      return publicUrlData.publicUrl;
+    } catch (err) {
+      console.error("Storage upload error:", err);
+      return null;
+    }
+  };
+
   // Helper to persist predictions to history in Supabase
   const saveToHistory = async (candidates: ExtendedCandidate[], currentImageSrc: string) => {
     if (!currentImageSrc || candidates.length === 0) return;
@@ -282,14 +320,27 @@ export default function ClassificationTab() {
 
     createThumbnail(currentImageSrc, async (thumbnailSrc) => {
       try {
-        // 1. Insert into riwayat_klasifikasi
+        // 1. Upload images to Supabase Storage
+        const imagePath = `images/${riwayatId}.jpg`;
+        const thumbnailPath = `thumbnails/${riwayatId}.jpg`;
+
+        const [imagePublicUrl, thumbnailPublicUrl] = await Promise.all([
+          uploadToStorage(currentImageSrc, imagePath),
+          uploadToStorage(thumbnailSrc, thumbnailPath)
+        ]);
+
+        if (!imagePublicUrl || !thumbnailPublicUrl) {
+          throw new Error("Failed to upload classification images to Supabase Storage.");
+        }
+
+        // 2. Insert into riwayat_klasifikasi
         const { error: riwayatError } = await supabase
           .from("riwayat_klasifikasi")
           .insert({
             id: riwayatId,
             pengguna_id: null,
-            image_path: currentImageSrc,
-            thumbnail_path: thumbnailSrc,
+            image_path: imagePublicUrl,
+            thumbnail_path: thumbnailPublicUrl,
             spesies_terdeteksi_id: topDetails.id !== "UNKNOWN" ? topDetails.id : null,
             confidence: topCandidate.confidence,
             created_at: new Date().toISOString()
@@ -297,7 +348,7 @@ export default function ClassificationTab() {
 
         if (riwayatError) throw riwayatError;
 
-        // 2. Insert candidates into kandidat_klasifikasi
+        // 3. Insert candidates into kandidat_klasifikasi
         const candidatesToInsert = candidates.map((cand, idx) => {
           const details = getSpeciesDetails(cand.name);
           return {
@@ -316,13 +367,13 @@ export default function ClassificationTab() {
           if (candError) console.error("Error inserting candidates:", candError);
         }
 
-        // 3. Save the history ID locally in localStorage
+        // 4. Save the history ID locally in localStorage
         const localHistoryIdsJson = localStorage.getItem("lepidoptera_history_ids");
         const localHistoryIds = localHistoryIdsJson ? JSON.parse(localHistoryIdsJson) : [];
         const updatedIds = [riwayatId, ...localHistoryIds].slice(0, 50);
         localStorage.setItem("lepidoptera_history_ids", JSON.stringify(updatedIds));
 
-        // 4. Reload local history from Supabase
+        // 5. Reload local history from Supabase
         loadHistoryFromDb(updatedIds);
       } catch (err) {
         console.error("Failed to save classification history to Supabase:", err);
@@ -340,19 +391,6 @@ export default function ClassificationTab() {
         console.error("Error enumerating devices:", err);
       }
     }
-  };
-
-  // Helper to convert base64 dataURL to File object
-  const dataURLtoFile = (dataurl: string, filename: string): File => {
-    const arr = dataurl.split(",");
-    const mime = arr[0].match(/:(.*?);/)?.[1] || "image/jpeg";
-    const bstr = atob(arr[1]);
-    let n = bstr.length;
-    const u8arr = new Uint8Array(n);
-    while (n--) {
-      u8arr[n] = bstr.charCodeAt(n);
-    }
-    return new File([u8arr], filename, { type: mime });
   };
 
   // Get species details dynamically from loaded DB list
