@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect } from "react";
 import { PredictionCandidate } from "../types";
+import { supabase } from "../lib/supabase";
 
 interface ExtendedCandidate extends PredictionCandidate {
   scientificName: string;
@@ -125,6 +126,103 @@ export default function ClassificationTab() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Database states
+  const [dbSpeciesList, setDbSpeciesList] = useState<any[]>([]);
+  const [historyItems, setHistoryItems] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [selectedHistoryItem, setSelectedHistoryItem] = useState<any>(null);
+
+  // Safe UUID generator
+  const generateUUID = () => {
+    if (typeof crypto !== "undefined" && crypto.randomUUID) {
+      return crypto.randomUUID();
+    }
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  };
+
+  // Load species from Supabase on mount
+  useEffect(() => {
+    async function loadDbSpecies() {
+      try {
+        const { data, error } = await supabase
+          .from("spesies")
+          .select("id, nama_umum, nama_ilmiah, deskripsi");
+        if (error) throw error;
+        setDbSpeciesList(data || []);
+      } catch (e) {
+        console.error("Failed to load species from DB:", e);
+      }
+    }
+    loadDbSpecies();
+  }, []);
+
+  // Fetch classification history matching local IDs from Supabase
+  const loadHistoryFromDb = async (ids?: string[]) => {
+    setLoadingHistory(true);
+    try {
+      const targetIds = ids || (() => {
+        const localHistoryIdsJson = localStorage.getItem("lepidoptera_history_ids");
+        return localHistoryIdsJson ? JSON.parse(localHistoryIdsJson) : [];
+      })();
+
+      if (targetIds.length === 0) {
+        setHistoryItems([]);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("riwayat_klasifikasi")
+        .select(`
+          id,
+          image_path,
+          thumbnail_path,
+          confidence,
+          created_at,
+          spesies (
+            nama_umum,
+            nama_ilmiah,
+            deskripsi
+          )
+        `)
+        .in("id", targetIds);
+
+      if (error) throw error;
+
+      const mapped = (data || []).map((item: any) => ({
+        id: item.id,
+        imageSrc: item.thumbnail_path || item.image_path,
+        speciesName: item.spesies?.nama_umum || "UNKNOWN",
+        scientificName: item.spesies?.nama_ilmiah || "Lepidoptera",
+        confidence: Number(item.confidence),
+        description: item.spesies?.deskripsi || "Deskripsi tidak tersedia.",
+        timestamp: new Date(item.created_at).toLocaleString("id-ID", {
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit"
+        })
+      })).sort((a, b) => b.id.localeCompare(a.id)); // sort descending (newest first)
+
+      setHistoryItems(mapped);
+    } catch (err) {
+      console.error("Failed to load history from Supabase:", err);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  useEffect(() => {
+    if (dbSpeciesList.length > 0) {
+      loadHistoryFromDb();
+    }
+  }, [dbSpeciesList]);
+
   // Real-time camera states and refs
   const [mode, setMode] = useState<"upload" | "camera">("upload");
   const [currentFacingMode, setCurrentFacingMode] = useState<"user" | "environment">("environment");
@@ -175,34 +273,59 @@ export default function ClassificationTab() {
     img.src = src;
   };
 
-  // Helper to persist predictions to history
-  const saveToHistory = (topCandidate: ExtendedCandidate, currentImageSrc: string) => {
-    if (!currentImageSrc) return;
-    createThumbnail(currentImageSrc, (thumbnailSrc) => {
+  // Helper to persist predictions to history in Supabase
+  const saveToHistory = async (candidates: ExtendedCandidate[], currentImageSrc: string) => {
+    if (!currentImageSrc || candidates.length === 0) return;
+    const topCandidate = candidates[0];
+    const topDetails = getSpeciesDetails(topCandidate.name);
+    const riwayatId = `HST-${Date.now()}`;
+
+    createThumbnail(currentImageSrc, async (thumbnailSrc) => {
       try {
-        const historyJson = localStorage.getItem("lepidoptera_history");
-        const historyList = historyJson ? JSON.parse(historyJson) : [];
+        // 1. Insert into riwayat_klasifikasi
+        const { error: riwayatError } = await supabase
+          .from("riwayat_klasifikasi")
+          .insert({
+            id: riwayatId,
+            pengguna_id: null,
+            image_path: currentImageSrc,
+            thumbnail_path: thumbnailSrc,
+            spesies_terdeteksi_id: topDetails.id !== "UNKNOWN" ? topDetails.id : null,
+            confidence: topCandidate.confidence,
+            created_at: new Date().toISOString()
+          });
 
-        const newHistoryItem = {
-          id: `HST-${Date.now()}`,
-          imageSrc: thumbnailSrc,
-          speciesName: topCandidate.name,
-          scientificName: topCandidate.scientificName,
-          confidence: topCandidate.confidence,
-          timestamp: new Date().toLocaleString("id-ID", {
-            year: "numeric",
-            month: "long",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit"
-          }),
-        };
+        if (riwayatError) throw riwayatError;
 
-        const updatedList = [newHistoryItem, ...historyList].slice(0, 50);
-        localStorage.setItem("lepidoptera_history", JSON.stringify(updatedList));
-      } catch (e) {
-        console.error("Failed to save prediction history:", e);
+        // 2. Insert candidates into kandidat_klasifikasi
+        const candidatesToInsert = candidates.map((cand, idx) => {
+          const details = getSpeciesDetails(cand.name);
+          return {
+            id: generateUUID(),
+            riwayat_id: riwayatId,
+            spesies_id: details.id !== "UNKNOWN" ? details.id : null,
+            confidence: cand.confidence,
+            peringkat: idx + 1
+          };
+        }).filter(c => c.spesies_id !== null);
+
+        if (candidatesToInsert.length > 0) {
+          const { error: candError } = await supabase
+            .from("kandidat_klasifikasi")
+            .insert(candidatesToInsert);
+          if (candError) console.error("Error inserting candidates:", candError);
+        }
+
+        // 3. Save the history ID locally in localStorage
+        const localHistoryIdsJson = localStorage.getItem("lepidoptera_history_ids");
+        const localHistoryIds = localHistoryIdsJson ? JSON.parse(localHistoryIdsJson) : [];
+        const updatedIds = [riwayatId, ...localHistoryIds].slice(0, 50);
+        localStorage.setItem("lepidoptera_history_ids", JSON.stringify(updatedIds));
+
+        // 4. Reload local history from Supabase
+        loadHistoryFromDb(updatedIds);
+      } catch (err) {
+        console.error("Failed to save classification history to Supabase:", err);
       }
     });
   };
@@ -232,11 +355,31 @@ export default function ClassificationTab() {
     return new File([u8arr], filename, { type: mime });
   };
 
-  // Safe fallback getSpeciesDetails implementation as requested
-  const getSpeciesDetails = (species: string) => ({
-    name: species,
-    scientificName: "-"
-  });
+  // Get species details dynamically from loaded DB list
+  const getSpeciesDetails = (predictedName: string) => {
+    const matched = dbSpeciesList.find(
+      s => s.nama_umum.toLowerCase() === predictedName.toLowerCase()
+    );
+    if (matched) {
+      return {
+        id: matched.id,
+        name: matched.nama_umum,
+        scientificName: matched.nama_ilmiah,
+        description: matched.deskripsi
+      };
+    }
+    return {
+      id: "UNKNOWN",
+      name: predictedName.toUpperCase(),
+      scientificName: "Lepidoptera",
+      description: "Deskripsi spesies tidak tersedia."
+    };
+  };
+
+  const handleSelectHistoryItem = (item: any) => {
+    setSelectedHistoryItem(item);
+    setIsHistoryModalOpen(true);
+  };
 
   // Helper to asynchronously get a valid File object from imageSrc (handles base64 and static path URLs)
   const getFileToUpload = async (src: string, file: File | null): Promise<File> => {
@@ -519,7 +662,7 @@ export default function ClassificationTab() {
       setPredictionResults(finalCandidates);
       setIsAnalyzing(false);
       setHasPrediction(true);
-      saveToHistory(finalCandidates[0], imageSrc);
+      saveToHistory(finalCandidates, imageSrc);
 
     } catch (err) {
       console.error("AI inference error:", err);
@@ -714,7 +857,7 @@ export default function ClassificationTab() {
                         Deskripsi Ciri Spesies:
                       </span>
                       <p className="text-sm leading-relaxed text-on-surface-variant text-justify">
-                        {speciesDescriptions[predictionResults[0]?.name] || "Penjelasan karakteristik morfologi untuk spesies ini belum tersedia di database."}
+                        {getSpeciesDetails(predictionResults[0]?.name).description}
                       </p>
                     </div>
                   </div>
@@ -826,7 +969,7 @@ export default function ClassificationTab() {
 
                         <div className="p-4 bg-surface-container border-l-4 border-primary rounded-r-lg mt-sm">
                           <p className="text-xs leading-relaxed text-on-surface-variant">
-                            {speciesDescriptions[predictionResults[0]?.name] || "Deskripsi spesies belum tersedia."}
+                            {getSpeciesDetails(predictionResults[0]?.name).description}
                           </p>
                         </div>
                       </>
@@ -844,6 +987,47 @@ export default function ClassificationTab() {
 
           {/* Guidance & Status Sidebar */}
           <div className="lg:col-span-4 flex flex-col gap-gutter">
+
+            {/* History Card */}
+            <div className="bg-surface-container-low border border-outline-variant rounded-xl p-md">
+              <h4 className="font-label-md text-label-md text-secondary mb-md border-b border-outline-variant pb-xs flex items-center gap-xs uppercase tracking-wider select-none font-bold">
+                <span className="material-symbols-outlined text-sm">history</span>
+                Riwayat Identifikasi
+              </h4>
+              {loadingHistory ? (
+                <div className="flex items-center justify-center py-4">
+                  <span className="material-symbols-outlined animate-spin text-primary text-2xl">sync</span>
+                </div>
+              ) : historyItems.length > 0 ? (
+                <div className="space-y-sm max-h-[350px] overflow-y-auto pr-xs">
+                  {historyItems.map((item) => (
+                    <div
+                      key={item.id}
+                      onClick={() => handleSelectHistoryItem(item)}
+                      className="flex gap-sm p-xs rounded-lg hover:bg-surface-container-high transition-colors cursor-pointer border border-transparent hover:border-outline-variant/30 group"
+                    >
+                      <div className="w-12 h-12 rounded overflow-hidden relative shrink-0 border border-outline-variant bg-surface">
+                        <img src={item.imageSrc} alt={item.speciesName} className="object-cover w-full h-full" />
+                      </div>
+                      <div className="flex-1 min-w-0 text-left">
+                        <h5 className="font-title-sm text-sm text-primary font-bold truncate group-hover:text-secondary transition-colors uppercase">
+                          {item.speciesName}
+                        </h5>
+                        <p className="text-xs text-outline italic truncate">{item.scientificName}</p>
+                        <div className="flex justify-between items-center mt-xs">
+                          <span className="text-[10px] text-on-surface-variant">{item.timestamp}</span>
+                          <span className="text-[10px] font-bold text-secondary">{item.confidence}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-on-surface-variant text-center py-4 select-none">
+                  Belum ada riwayat identifikasi.
+                </p>
+              )}
+            </div>
 
             {/* Guidelines Card */}
             <div className="bg-surface-container-low border border-outline-variant rounded-xl p-md">
@@ -898,6 +1082,88 @@ export default function ClassificationTab() {
           </div>
         </div>
       </div>
+
+      {/* History Detail Modal */}
+      {isHistoryModalOpen && selectedHistoryItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm transition-opacity p-4 animate-fade-in">
+          <div className="bg-surface-container-lowest border border-outline-variant rounded-xl w-full max-w-2xl p-6 shadow-2xl relative flex flex-col max-h-[90vh] overflow-y-auto">
+            {/* Modal Header */}
+            <div className="flex justify-between items-center border-b border-outline-variant pb-4 mb-4">
+              <h3 className="text-lg font-bold text-primary font-title-lg flex items-center gap-xs">
+                <span className="material-symbols-outlined text-secondary">history</span>
+                Detail Riwayat Identifikasi
+              </h3>
+              <button
+                onClick={() => setIsHistoryModalOpen(false)}
+                className="text-on-surface-variant hover:bg-surface-container-high p-2 rounded-full transition-colors flex items-center justify-center cursor-pointer"
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex flex-col gap-4 text-on-surface text-left">
+              <div className="relative w-full h-52 rounded-lg overflow-hidden border border-outline-variant/60 bg-surface shadow-inner">
+                <img
+                  alt={selectedHistoryItem.speciesName}
+                  className="object-cover w-full h-full"
+                  src={selectedHistoryItem.imageSrc}
+                />
+              </div>
+
+              <div>
+                <span className="text-xs uppercase font-bold tracking-wider text-secondary block mb-1">
+                  Spesies Terdeteksi
+                </span>
+                <h4 className="text-2xl font-extrabold text-primary leading-tight font-headline-sm uppercase">
+                  {selectedHistoryItem.speciesName}
+                </h4>
+                <p className="italic text-base text-outline mt-1">
+                  {selectedHistoryItem.scientificName}
+                </p>
+              </div>
+
+              <div className="border-t border-outline-variant pt-4">
+                <div className="flex justify-between items-center text-sm font-bold mb-xs">
+                  <span className="text-on-surface-variant uppercase tracking-widest text-xs">Tingkat Kepercayaan (Confidence)</span>
+                  <span className="text-secondary text-base font-bold">{selectedHistoryItem.confidence}%</span>
+                </div>
+                <div className="h-3 bg-surface-container-low rounded-full overflow-hidden flex items-center p-[2px]">
+                  <div
+                    className="h-full bg-secondary rounded-full"
+                    style={{ width: `${selectedHistoryItem.confidence}%` }}
+                  ></div>
+                </div>
+              </div>
+
+              <div className="border-t border-outline-variant pt-4 mt-2">
+                <span className="text-xs uppercase font-bold tracking-wider text-primary block mb-2">
+                  Deskripsi Ciri Spesies:
+                </span>
+                <div className="p-4 bg-surface-container border-l-4 border-primary rounded-r-lg">
+                  <p className="text-sm text-justify leading-relaxed text-on-surface-variant">
+                    {selectedHistoryItem.description}
+                  </p>
+                </div>
+              </div>
+
+              <div className="text-xs text-on-surface-variant text-right italic">
+                Waktu Identifikasi: {selectedHistoryItem.timestamp}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="mt-6 flex justify-end border-t border-outline-variant pt-4">
+              <button
+                onClick={() => setIsHistoryModalOpen(false)}
+                className="px-5 py-2 bg-primary text-white rounded-lg hover:bg-primary-container transition-colors font-medium text-sm shadow cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

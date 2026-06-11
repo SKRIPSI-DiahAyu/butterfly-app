@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { supabase } from "../lib/supabase";
 import {
   BarChart,
   Bar,
@@ -49,18 +50,33 @@ export default function AnalyticsTab() {
 
     const loadData = async () => {
       try {
-        // Fetch performance data from FastAPI backend
-        const response = await fetch("http://localhost:8000/api/performance");
-        if (!response.ok) {
-          throw new Error("Failed to fetch performance data from backend");
-        }
-        const apiData: ModelPerformance[] = await response.json();
+        // Fetch performance data from Supabase
+        const { data, error } = await supabase
+          .from("performa_model")
+          .select(`
+            jumlah_benar,
+            jumlah_total,
+            avg_confidence,
+            spesies (
+              nama_umum
+            )
+          `);
+
+        if (error) throw error;
 
         // Map data to calculate accuracy and sort descending
-        const formattedData = apiData.map(item => ({
-          ...item,
-          accuracy: Math.round((item.correct / item.total) * 10000) / 100
-        })).sort((a, b) => (b.accuracy || 0) - (a.accuracy || 0));
+        const formattedData = (data || []).map((item: any) => {
+          const correct = item.jumlah_benar;
+          const total = item.jumlah_total;
+          const avgConf = Number(item.avg_confidence);
+          return {
+            species: item.spesies?.nama_umum || "UNKNOWN",
+            correct,
+            total,
+            avgConfidence: avgConf,
+            accuracy: Math.round((correct / total) * 10000) / 100
+          };
+        }).sort((a, b) => b.accuracy - a.accuracy);
 
         setPerformanceData(formattedData);
         setDataSource("api");
