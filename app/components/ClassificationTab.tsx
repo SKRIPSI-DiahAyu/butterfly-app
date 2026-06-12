@@ -116,6 +116,8 @@ const speciesDescriptions: Record<string, string> = {
   "zebra long wing": "Memiliki pola garis hitam dan kuning memanjang menyerupai zebra pada kedua sayap."
 };
 
+const HISTORY_LIMIT = 10;
+
 export default function ClassificationTab() {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -132,6 +134,7 @@ export default function ClassificationTab() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [selectedHistoryItem, setSelectedHistoryItem] = useState<any>(null);
+  const [showAllHistory, setShowAllHistory] = useState(false);
 
   // Safe UUID generator
   const generateUUID = () => {
@@ -750,9 +753,10 @@ export default function ClassificationTab() {
         </div>
 
         {/* Identification Interface Grid */}
+        {/* Identification Interface Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-gutter items-start">
 
-          {/* Upload & Prediction Section (Main Center Column) */}
+          {/* Upload & Prediction Section (Main Column - 2/3 Width) */}
           <div className="lg:col-span-8 flex flex-col gap-md">
             {mode === "upload" && (!hasPrediction ? (
               <>
@@ -1023,49 +1027,8 @@ export default function ClassificationTab() {
             )}
           </div>
 
-          {/* Guidance & Status Sidebar */}
+          {/* Guidance Sidebar (1/3 Width) */}
           <div className="lg:col-span-4 flex flex-col gap-gutter">
-
-            {/* History Card */}
-            <div className="bg-surface-container-low border border-outline-variant rounded-xl p-md">
-              <h4 className="font-label-md text-label-md text-secondary mb-md border-b border-outline-variant pb-xs flex items-center gap-xs uppercase tracking-wider select-none font-bold">
-                <span className="material-symbols-outlined text-sm">history</span>
-                Riwayat Identifikasi
-              </h4>
-              {loadingHistory ? (
-                <div className="flex items-center justify-center py-4">
-                  <span className="material-symbols-outlined animate-spin text-primary text-2xl">sync</span>
-                </div>
-              ) : historyItems.length > 0 ? (
-                <div className="space-y-sm max-h-[350px] overflow-y-auto pr-xs">
-                  {historyItems.map((item) => (
-                    <div
-                      key={item.id}
-                      onClick={() => handleSelectHistoryItem(item)}
-                      className="flex gap-sm p-xs rounded-lg hover:bg-surface-container-high transition-colors cursor-pointer border border-transparent hover:border-outline-variant/30 group"
-                    >
-                      <div className="w-12 h-12 rounded overflow-hidden relative shrink-0 border border-outline-variant bg-surface">
-                        <img src={item.imageSrc} alt={item.speciesName} className="object-cover w-full h-full" />
-                      </div>
-                      <div className="flex-1 min-w-0 text-left">
-                        <h5 className="font-title-sm text-sm text-primary font-bold truncate group-hover:text-secondary transition-colors uppercase">
-                          {item.speciesName}
-                        </h5>
-                        <p className="text-xs text-outline italic truncate">{item.scientificName}</p>
-                        <div className="flex justify-between items-center mt-xs">
-                          <span className="text-[10px] text-on-surface-variant">{item.timestamp}</span>
-                          <span className="text-[10px] font-bold text-secondary">{item.confidence}%</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-on-surface-variant text-center py-4 select-none">
-                  Belum ada riwayat identifikasi.
-                </p>
-              )}
-            </div>
 
             {/* Guidelines Card */}
             <div className="bg-surface-container-low border border-outline-variant rounded-xl p-md">
@@ -1118,6 +1081,79 @@ export default function ClassificationTab() {
             </div>
 
           </div>
+        </div>
+
+        {/* Full-width History Section (At the bottom) */}
+        <div className="mt-8 bg-surface-container-low border border-outline-variant rounded-xl p-6 shadow-md w-full mb-10">
+          <h4 className="font-label-md text-label-md text-secondary mb-md border-b border-outline-variant pb-xs flex items-center gap-xs uppercase tracking-wider select-none font-bold">
+            <span className="material-symbols-outlined text-sm">history</span>
+            Riwayat Identifikasi
+          </h4>
+          {loadingHistory ? (
+            <div className="flex items-center justify-center py-8">
+              <span className="material-symbols-outlined animate-spin text-primary text-3xl">sync</span>
+            </div>
+          ) : historyItems.length > 0 ? (
+            <div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-md">
+                {(showAllHistory ? historyItems : historyItems.slice(0, HISTORY_LIMIT)).map((item) => (
+                  <div
+                    key={item.id}
+                    onClick={() => handleSelectHistoryItem(item)}
+                    className="flex flex-col bg-surface-container-lowest border border-outline-variant hover:border-primary hover:shadow-lg transition-all duration-300 rounded-xl overflow-hidden cursor-pointer group h-full"
+                  >
+                    {/* Thumbnail Image with Confidence badge */}
+                    <div className="relative aspect-video w-full overflow-hidden bg-surface-dim border-b border-outline-variant/30 shrink-0">
+                      <img
+                        src={item.imageSrc}
+                        alt={item.speciesName}
+                        className="object-cover w-full h-full group-hover:scale-105 transition-transform duration-500"
+                        loading="lazy"
+                      />
+                      <div className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-full bg-primary/95 text-on-primary font-bold text-[10px] tracking-wider shadow-sm select-none">
+                        {item.confidence}%
+                      </div>
+                    </div>
+
+                    {/* Card Body */}
+                    <div className="p-3.5 flex-1 flex flex-col justify-between text-left">
+                      <div className="mb-3">
+                        <h5 className="font-title-sm text-sm text-primary font-bold uppercase truncate group-hover:text-secondary transition-colors" title={item.speciesName}>
+                          {item.speciesName}
+                        </h5>
+                        <p className="text-xs text-outline italic truncate mt-0.5" title={item.scientificName}>
+                          {item.scientificName}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-xs text-[10px] text-on-surface-variant border-t border-outline-variant/30 pt-2.5 select-none">
+                        <span className="material-symbols-outlined text-[12px] text-secondary shrink-0">schedule</span>
+                        <span className="truncate">{item.timestamp}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {historyItems.length > HISTORY_LIMIT && (
+                <div className="flex justify-center mt-6">
+                  <button
+                    onClick={() => setShowAllHistory(!showAllHistory)}
+                    className="px-6 py-2.5 bg-surface-container-high hover:bg-surface-container-highest text-primary font-bold text-sm rounded-full border border-outline-variant hover:border-primary transition-all duration-200 cursor-pointer flex items-center gap-xs shadow-sm"
+                  >
+                    <span className="material-symbols-outlined text-base">
+                      {showAllHistory ? "expand_less" : "expand_more"}
+                    </span>
+                    {showAllHistory ? "Tampilkan Lebih Sedikit" : `Lihat Semua Riwayat (${historyItems.length})`}
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-on-surface-variant text-center py-8 select-none">
+              Belum ada riwayat identifikasi.
+            </p>
+          )}
         </div>
       </div>
 

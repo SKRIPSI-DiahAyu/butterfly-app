@@ -123,6 +123,19 @@ export default function AnalyticsTab() {
     return null;
   };
 
+  // Calculate high-level metrics
+  const totalSpecies = performanceData.length;
+  const totalSamples = performanceData.reduce((acc, curr) => acc + curr.total, 0);
+  const totalCorrect = performanceData.reduce((acc, curr) => acc + curr.correct, 0);
+
+  const avgAccuracy = totalSamples > 0
+    ? Math.round((totalCorrect / totalSamples) * 10000) / 100
+    : 0;
+
+  const avgConfidence = totalSpecies > 0
+    ? Math.round((performanceData.reduce((acc, curr) => acc + curr.avgConfidence, 0) / totalSpecies) * 10) / 10
+    : 0;
+
   if (!isClient) {
     return (
       <main className="pt-24 pb-32 md:pb-16 px-margin-mobile md:px-margin-desktop min-h-screen">
@@ -158,6 +171,67 @@ export default function AnalyticsTab() {
         </p>
       </section>
 
+      {/* High-Level Metric Cards */}
+      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-base mb-lg">
+        {loading ? (
+          Array.from({ length: 4 }).map((_, idx) => (
+            <div key={idx} className="bg-surface-container-lowest border border-outline-variant rounded-xl p-md shadow-sm flex items-center gap-md animate-pulse">
+              <div className="w-12 h-12 rounded-lg bg-surface-container-high shrink-0"></div>
+              <div className="flex-1 space-y-2">
+                <div className="h-3 bg-surface-container-high rounded w-2/3"></div>
+                <div className="h-5 bg-surface-container-high rounded w-1/2"></div>
+              </div>
+            </div>
+          ))
+        ) : (
+          <>
+            {/* Card 1: Rata-rata Akurasi */}
+            <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-4 shadow-sm flex items-center gap-3 hover:shadow-md transition-shadow select-none">
+              <div className="w-12 h-12 rounded-lg bg-[#E8F5E9] text-[#2E7D32] flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-2xl">analytics</span>
+              </div>
+              <div className="text-left min-w-0 flex-1">
+                <p className="text-[11px] text-on-surface-variant font-bold uppercase tracking-wider truncate">Akurasi Model</p>
+                <h4 className="text-lg font-black text-primary mt-0.5 truncate">{avgAccuracy}%</h4>
+              </div>
+            </div>
+
+            {/* Card 2: Total Kelas Spesies */}
+            <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-4 shadow-sm flex items-center gap-3 hover:shadow-md transition-shadow select-none">
+              <div className="w-12 h-12 rounded-lg bg-[#E3F2FD] text-[#0D47A1] flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-2xl">category</span>
+              </div>
+              <div className="text-left min-w-0 flex-1">
+                <p className="text-[11px] text-on-surface-variant font-bold uppercase tracking-wider truncate">Total Spesies</p>
+                <h4 className="text-lg font-black text-primary mt-0.5 truncate">{totalSpecies} Kelas</h4>
+              </div>
+            </div>
+
+            {/* Card 3: Total Sampel Uji */}
+            <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-4 shadow-sm flex items-center gap-3 hover:shadow-md transition-shadow select-none">
+              <div className="w-12 h-12 rounded-lg bg-[#FFF3E0] text-[#E65100] flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-2xl">science</span>
+              </div>
+              <div className="text-left min-w-0 flex-1">
+                <p className="text-[11px] text-on-surface-variant font-bold uppercase tracking-wider truncate">Total Sampel Uji</p>
+                <h4 className="text-lg font-black text-primary mt-0.5 truncate">{totalSamples.toLocaleString("id-ID")} Sampel</h4>
+              </div>
+            </div>
+
+            {/* Card 4: Rata-rata Keyakinan */}
+            <div className="bg-surface-container-lowest border border-outline-variant rounded-xl p-4 shadow-sm flex items-center gap-3 hover:shadow-md transition-shadow select-none">
+              <div className="w-12 h-12 rounded-lg bg-[#F3E5F5] text-[#4A148C] flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-2xl">verified</span>
+              </div>
+              <div className="text-left min-w-0 flex-1">
+                <p className="text-[11px] text-on-surface-variant font-bold uppercase tracking-wider truncate">Rerata Keyakinan</p>
+                <h4 className="text-lg font-black text-primary mt-0.5 truncate">{avgConfidence}%</h4>
+              </div>
+            </div>
+          </>
+        )}
+      </section>
+
       {/* Main Chart Dashboard Container */}
       <section className="bg-surface-container-lowest border border-outline-variant rounded-xl p-md md:p-lg shadow-sm">
         {loading ? (
@@ -179,47 +253,58 @@ export default function AnalyticsTab() {
               </span>
             </div>
 
-            {/* Recharts Dynamic Responsive Container */}
-            <div className="w-full h-[550px] pt-md">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={performanceData}
-                  margin={{ top: 25, right: 10, left: -10, bottom: 95 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
-                  <XAxis
-                    dataKey="species"
-                    angle={-45}
-                    textAnchor="end"
-                    height={100}
-                    interval={0}
-                    tick={{ fontSize: 10, fill: "#2D3748", fontWeight: "600" }}
-                  />
-                  <YAxis
-                    domain={[0, 110]}
-                    tickCount={12}
-                    tick={{ fontSize: 11, fill: "#4A5568" }}
-                  />
-                  <Tooltip content={<CustomTooltip />} cursor={{ fill: "#F7FAFC", opacity: 0.6 }} />
-                  <Bar
-                    dataKey="accuracy"
-                    fill="#3a5a40"
-                    radius={[6, 6, 0, 0]}
-                    maxBarSize={60}
+            {/* Horizontally scrollable container with custom styling */}
+            <div className="w-full overflow-x-auto custom-scrollbar pb-sm">
+              <div
+                style={{ width: `${Math.max(800, performanceData.length * 36)}px` }}
+                className="h-[500px] pt-md"
+              >
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={performanceData}
+                    margin={{ top: 25, right: 10, left: -10, bottom: 95 }}
                   >
-                    <LabelList
-                      dataKey="accuracy"
-                      position="top"
-                      formatter={(val: any) => `${val}%`}
-                      style={{
-                        fill: "#2D3748",
-                        fontSize: 10,
-                        fontWeight: "bold",
-                      }}
+                    <defs>
+                      <linearGradient id="accuracyGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="var(--color-secondary)" stopOpacity={0.9} />
+                        <stop offset="100%" stopColor="var(--color-primary-container)" stopOpacity={0.95} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
+                    <XAxis
+                      dataKey="species"
+                      angle={-45}
+                      textAnchor="end"
+                      height={100}
+                      interval={0}
+                      tick={{ fontSize: 9, fill: "var(--color-on-surface-variant)", fontWeight: "600" }}
                     />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+                    <YAxis
+                      domain={[0, 110]}
+                      tickCount={12}
+                      tick={{ fontSize: 10, fill: "var(--color-outline)" }}
+                    />
+                    <Tooltip content={<CustomTooltip />} cursor={{ fill: "var(--color-surface-container-high)", opacity: 0.4 }} />
+                    <Bar
+                      dataKey="accuracy"
+                      fill="url(#accuracyGradient)"
+                      radius={[6, 6, 0, 0]}
+                      maxBarSize={30}
+                    >
+                      <LabelList
+                        dataKey="accuracy"
+                        position="top"
+                        formatter={(val: any) => `${val}%`}
+                        style={{
+                          fill: "var(--color-on-surface)",
+                          fontSize: 9,
+                          fontWeight: "bold",
+                        }}
+                      />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             </div>
           </div>
         )}
